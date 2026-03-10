@@ -1,0 +1,3 @@
+Finding ID,Title,Risk Rating,Control Objective,Observation,Root Cause,Impact,Recommendation,Management Response,Target Date,Owner,Status
+F-01,[Short title],High / Medium / Low,[Control or requirement reference],[What was found],[Why it occurred],[Potential consequences],[What should be done],[To be completed by management],[YYYY-MM-DD],[Name / Function],Open / In Progress / Closed
+F-02,[Short title],,,,,,,,,,
