@@ -167,3 +167,167 @@ Hand this list to Claude Code as the seed for the static scan. Refine against th
 - **Tier 1 cannot certify.** Only Tier 2 with egress blocked proves standalone behaviour. Keep the verdicts honest: Phase 1 "yes" means "no static blockers found," not "confirmed standalone."
 
 > **Framing note for the audit angle:** Tier 1 = design evidence (where the cloud dependency lives, `file:line`); Tier 2 = operating-effectiveness evidence (it actually ran with no cloud egress). That two-layer split is what makes the output auditable rather than just a script result.
+
+---
+
+## 7. Prerequisites
+
+**Phase 1 (static scan):**
+
+- Python 3.11+ (uses `tomllib`; falls back to regex on older versions)
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — for cross-language pattern matching on JS/TS files
+- No network required when running with `--no-llm`
+
+**Phase 1 (with LLM pass):**
+
+- An OpenAI-compatible LLM endpoint accessible at `STANDALONE_CHECK_BASE_URL` (e.g. a local Ollama instance at `http://localhost:11434/v1`)
+- `openai` Python SDK (`pip install openai`)
+
+**Phase 2 (runtime harness):**
+
+- Docker + Docker Compose
+- ~2 GB disk for Ollama + `llama3.2:3b` model weights
+- No GPU required (CPU inference is sufficient — we're testing plumbing, not quality)
+
+---
+
+## 8. Target repo — what we're scanning
+
+The SAAF repo: [github.com/SAAF-Project/threewaysecurity](https://github.com/SAAF-Project/threewaysecurity)
+
+It contains these agent projects:
+
+| Agent | Entry point | LLM client | What it does |
+|---|---|---|---|
+| Audit Document Reviewer | `review_document.py` | `anthropic` SDK | Reviews internal audit docs, returns structured findings |
+| OWASP Agent Reviewer | `review_agent.py` + `app.py` | `anthropic` SDK | Reviews agent source code against OWASP Top 10 for LLMs |
+| SAAF Compliance Agent | `saaf/core/agent.py` | `anthropic` SDK | Generates structured compliance reports via Pydantic models |
+| Project prototype | `project_2026-03-24/app.py` | `anthropic` SDK (via Flask) | Earlier prototype of the OWASP web portal |
+
+**Note:** All agents currently use the Anthropic SDK directly with `claude-opus-4-6`. None use the OpenAI-compatible interface today. This means every agent will likely score **"no"** in Phase 1 on the first run — which is the correct, expected result. The value is in documenting exactly where the lock-in lives and what the fix path would be.
+
+---
+
+## 9. Proposed file layout
+
+```
+standalone-check/
+├── standalone_check/
+│   ├── __init__.py
+│   ├── cli.py                 # argparse entry point
+│   ├── scanner/
+│   │   ├── __init__.py
+│   │   ├── python_ast.py      # ast-based Python analysis
+│   │   ├── ripgrep.py         # rg-based cross-language fallback
+│   │   ├── signals.py         # SIGNALS rubric as structured data
+│   │   └── verdict.py         # verdict logic (yes/partial/no)
+│   ├── llm_pass.py            # optional LLM fuzzy-case review
+│   ├── reporter.py            # JSON + summary.md output
+│   └── runtime/               # Phase 2
+│       ├── __init__.py
+│       ├── harness.py          # docker-compose generation + orchestration
+│       ├── egress_logger.py    # parse blocked connection logs
+│       └── templates/
+│           ├── docker-compose.yml.j2
+│           └── litellm_config.yml.j2
+├── reports/                   # generated output (gitignored)
+├── tests/
+│   ├── fixtures/
+│   │   ├── agent_portable/    # fake agent that should score "yes"
+│   │   ├── agent_locked/      # fake agent that should score "no"
+│   │   └── agent_partial/     # fake agent that should score "partial"
+│   ├── test_python_ast.py
+│   ├── test_ripgrep.py
+│   ├── test_verdict.py
+│   └── test_reporter.py
+├── pyproject.toml
+├── README.md
+└── .gitignore
+```
+
+---
+
+## 10. CLI usage examples
+
+```bash
+# Phase 1 — static scan, no network (deterministic only)
+standalone-check scan /path/to/SAAF --no-llm
+
+# Phase 1 — static scan with LLM fuzzy pass (needs STANDALONE_CHECK_BASE_URL)
+export STANDALONE_CHECK_BASE_URL=http://localhost:11434/v1
+standalone-check scan /path/to/SAAF
+
+# Phase 1 — scan a single project subdirectory
+standalone-check scan /path/to/SAAF/saaf --no-llm
+
+# Phase 2 — runtime proof (requires Docker)
+standalone-check runtime /path/to/SAAF
+
+# Phase 2 — runtime with a specific model
+standalone-check runtime /path/to/SAAF --model llama3.2:3b
+
+# View the summary
+cat ./reports/summary.md
+```
+
+---
+
+## 11. Test plan — validating the scanner
+
+### Test fixtures (synthetic agents)
+
+Build three fake agent directories under `tests/fixtures/`:
+
+| Fixture | Expected verdict | What it contains |
+|---|---|---|
+| `agent_portable/` | **yes** | Uses `openai.OpenAI(base_url=os.environ.get("OPENAI_BASE_URL"))`, model from env |
+| `agent_locked/` | **no** | Uses `anthropic.Anthropic()` directly, hardcoded `claude-3` model |
+| `agent_partial/` | **partial** | Uses `openai.OpenAI()` but `base_url` not configurable, hardcoded `gpt-4o` |
+
+### First real-world validation
+
+Run against the SAAF repo itself:
+
+```bash
+standalone-check scan C:\Users\natha\SAAF --no-llm
+```
+
+**Expected results for SAAF agents:**
+
+- `review_document.py` → **no** (Anthropic SDK, no OpenAI-compatible path)
+- `review_agent.py` → **no** (same — `anthropic.Anthropic()` with `claude-opus-4-6`)
+- `saaf/` → **no** (same pattern in `core/agent.py`)
+- `project_2026-03-24/` → **no** (same)
+
+All four should produce HIGH-severity blockers of type "anthropic-native client" with `file:line` evidence pointing at the `client = anthropic.Anthropic()` instantiation and the `model="claude-opus-4-6"` parameter.
+
+### Self-check
+
+The checker's own LLM client must pass its own scan:
+
+```bash
+standalone-check scan ./standalone-check --no-llm
+# Expected: "yes" — uses openai SDK with configurable STANDALONE_CHECK_BASE_URL
+```
+
+---
+
+## 12. Scope edges — signals not yet covered
+
+The detection rubric in section 3 covers SDK-based access patterns. These additional patterns should be flagged but are handled differently:
+
+### Raw HTTP calls to cloud LLM APIs
+
+Agents that bypass SDKs and call LLM APIs via `requests.post("https://api.openai.com/v1/chat/completions", ...)` or similar. Detection: grep for known cloud API URL patterns inside `requests`, `httpx`, `urllib`, or `fetch` calls. Treat as HIGH severity — same as a hardcoded endpoint.
+
+### Multi-provider wrappers
+
+Agents that route through a custom abstraction layer (e.g. `providers/llm.py` that wraps both Anthropic and OpenAI). The AST scanner may not trace through the indirection. This is the primary use case for the optional LLM pass — it reads the provider module in context and assesses portability holistically.
+
+### Transitive dependencies
+
+A framework (e.g. LangChain, CrewAI) may default to a cloud embedder or a cloud vector store even if the top-level LLM call is portable. Phase 1 can flag the framework import as a **warning** but cannot resolve the runtime behaviour — this is exactly why Phase 2 exists.
+
+### Non-LLM cloud dependencies
+
+Some agents depend on cloud services that aren't LLM endpoints (e.g. Pinecone for vectors, S3 for storage, a managed database). These break "runs fully in-tenant" but are a different class of finding. Flag them separately under `cloud_only_features` in the report, not as model-access blockers.
