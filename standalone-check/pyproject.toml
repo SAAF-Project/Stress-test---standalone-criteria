@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "standalone-check"
+version = "0.1.0"
+description = "Audit agent projects for standalone (self-hosted LLM) readiness"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+web = [
+    "streamlit>=1.35",
+]
+
+[project.scripts]
+standalone-check = "standalone_check.cli:main"
+standalone-check-web = "standalone_check.web:launch"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.hatch.build.targets.wheel]
+packages = ["standalone_check"]
