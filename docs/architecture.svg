@@ -1,0 +1,154 @@
+<svg viewBox="0 0 820 700" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, sans-serif" font-size="13">
+  <title>SAAF Standalone-Readiness Checker — Architectuurdiagram</title>
+  <desc>Schematisch overzicht van de twee-tier architectuur: statische scan (Tier 1) en runtime harness (Tier 2)</desc>
+
+  <!-- Background -->
+  <rect width="820" height="700" fill="#f8f9fa" rx="12"/>
+
+  <!-- Title -->
+  <text x="410" y="36" text-anchor="middle" font-size="16" font-weight="700" fill="#1a1a2e">SAAF — Standalone-Readiness Checker</text>
+  <text x="410" y="54" text-anchor="middle" font-size="11" fill="#6b7280">Controleert of agent-projecten op een lokaal/self-hosted model kunnen draaien</text>
+
+  <!-- INPUT -->
+  <rect x="30" y="78" width="140" height="52" rx="8" fill="#e0e7ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="100" y="100" text-anchor="middle" font-weight="600" fill="#3730a3">Monorepo</text>
+  <text x="100" y="117" text-anchor="middle" font-size="11" fill="#4338ca">Agent-projecten (input)</text>
+
+  <!-- Arrow: input → CLI -->
+  <line x1="170" y1="104" x2="212" y2="104" stroke="#6366f1" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- CLI / Entry point -->
+  <rect x="212" y="78" width="130" height="52" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="277" y="100" text-anchor="middle" font-weight="600" fill="#1e40af">standalone-check</text>
+  <text x="277" y="117" text-anchor="middle" font-size="11" fill="#1d4ed8">cli.py · web.py</text>
+
+  <!-- Arrow: CLI → Tier 1 -->
+  <line x1="277" y1="130" x2="277" y2="168" stroke="#3b82f6" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- TIER 1 -->
+  <rect x="30" y="168" width="530" height="220" rx="10" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="44" y="186" font-size="11" font-weight="700" fill="#b45309">TIER 1 — Statische scan  (geen netwerk vereist)</text>
+
+  <rect x="48" y="196" width="240" height="108" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="168" y="214" text-anchor="middle" font-weight="600" fill="#92400e">Scanner</text>
+  <line x1="48" y1="222" x2="288" y2="222" stroke="#f59e0b" stroke-width="1"/>
+  <text x="60" y="238" font-size="11" fill="#78350f">python_ast.py  — AST-analyse Python</text>
+  <text x="60" y="254" font-size="11" fill="#78350f">ripgrep.py      — cross-taal grep</text>
+  <text x="60" y="270" font-size="11" fill="#78350f">config_files.py — env/config check</text>
+  <text x="60" y="286" font-size="11" fill="#78350f">signals.py      — lock-in patronen</text>
+
+  <rect x="310" y="196" width="230" height="108" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="425" y="214" text-anchor="middle" font-weight="600" fill="#92400e">LLM-pass (optioneel)</text>
+  <line x1="310" y1="222" x2="540" y2="222" stroke="#f59e0b" stroke-width="1"/>
+  <text x="322" y="238" font-size="11" fill="#78350f">llm_pass.py</text>
+  <text x="322" y="254" font-size="11" fill="#78350f">Fuzzy cases die AST/grep mist</text>
+  <text x="322" y="270" font-size="11" fill="#78350f">--no-llm → slaat over</text>
+  <text x="322" y="286" font-size="11" fill="#78350f">Base URL via STANDALONE_CHECK_BASE_URL</text>
+
+  <rect x="48" y="320" width="492" height="52" rx="8" fill="#fff7ed" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="294" y="341" text-anchor="middle" font-weight="600" fill="#92400e">verdict.py  ·  reporter.py</text>
+  <text x="294" y="358" text-anchor="middle" font-size="11" fill="#78350f">yes / partial / no  →  reports/&lt;project&gt;.json  +  summary.md</text>
+
+  <line x1="288" y1="250" x2="310" y2="250" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrAmb)"/>
+  <line x1="168" y1="304" x2="168" y2="320" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrAmb)"/>
+  <line x1="425" y1="304" x2="425" y2="320" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrAmb)"/>
+
+  <!-- TIER 2 -->
+  <rect x="30" y="420" width="530" height="220" rx="10" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="44" y="438" font-size="11" font-weight="700" fill="#065f46">TIER 2 — Runtime harness  (Docker Compose, alleen voor "yes"/"partial")</text>
+
+  <rect x="48" y="450" width="140" height="70" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="118" y="471" text-anchor="middle" font-weight="600" fill="#065f46">ollama</text>
+  <text x="118" y="488" text-anchor="middle" font-size="11" fill="#047857">Lokaal LLM</text>
+  <text x="118" y="504" text-anchor="middle" font-size="11" fill="#047857">llama3.2:3b</text>
+
+  <rect x="218" y="450" width="150" height="70" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="293" y="471" text-anchor="middle" font-weight="600" fill="#065f46">litellm proxy</text>
+  <text x="293" y="488" text-anchor="middle" font-size="11" fill="#047857">OpenAI-compat. :4000</text>
+  <text x="293" y="504" text-anchor="middle" font-size="11" fill="#047857">voor ollama</text>
+
+  <rect x="398" y="450" width="148" height="70" rx="8" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="472" y="471" text-anchor="middle" font-weight="600" fill="#065f46">agent-runner</text>
+  <text x="472" y="488" text-anchor="middle" font-size="11" fill="#047857">Agent entrypoint</text>
+  <text x="472" y="504" text-anchor="middle" font-size="11" fill="#047857">intern netwerk only</text>
+
+  <rect x="48" y="536" width="492" height="40" rx="6" fill="#ecfdf5" stroke="#10b981" stroke-width="1"/>
+  <text x="294" y="553" text-anchor="middle" font-size="11" font-weight="600" fill="#065f46">Netwerkregel: agent-runner heeft GEEN internet — alleen litellm bereikbaar</text>
+  <text x="294" y="568" text-anchor="middle" font-size="11" fill="#047857">Blocked egress → FAIL  |  Smoke task OK + geen cloud-egress → PASS</text>
+
+  <rect x="48" y="588" width="492" height="40" rx="6" fill="#d1fae5" stroke="#10b981" stroke-width="1.5"/>
+  <text x="294" y="607" text-anchor="middle" font-weight="600" fill="#065f46">reports/&lt;project&gt;.runtime.json  →  fold terug in summary.md</text>
+  <text x="294" y="622" text-anchor="middle" font-size="11" fill="#047857">PASS / FAIL  +  welke cloud-host geprobeerd werd</text>
+
+  <line x1="188" y1="485" x2="218" y2="485" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrGreen)"/>
+  <line x1="368" y1="485" x2="398" y2="485" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrGreen)"/>
+  <line x1="118" y1="520" x2="118" y2="536" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrGreen)"/>
+  <line x1="472" y1="520" x2="472" y2="536" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrGreen)"/>
+
+  <!-- Arrow Tier 1 → Tier 2 -->
+  <line x1="294" y1="388" x2="294" y2="420" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4,3" marker-end="url(#arrGray)"/>
+  <text x="298" y="408" font-size="10" fill="#64748b">yes/partial</text>
+
+  <!-- SUPPORT MODULES -->
+  <rect x="580" y="78" width="210" height="340" rx="10" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="685" y="97" text-anchor="middle" font-size="11" font-weight="700" fill="#374151">Ondersteunende modules</text>
+
+  <rect x="594" y="108" width="182" height="52" rx="7" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="685" y="128" text-anchor="middle" font-weight="600" fill="#4c1d95">app/</text>
+  <text x="685" y="145" text-anchor="middle" font-size="11" fill="#5b21b6">agent.py · chatbot.py</text>
+
+  <rect x="594" y="172" width="182" height="72" rx="7" fill="#fce7f3" stroke="#db2777" stroke-width="1.5"/>
+  <text x="685" y="192" text-anchor="middle" font-weight="600" fill="#831843">tools/</text>
+  <text x="685" y="208" text-anchor="middle" font-size="11" fill="#9d174d">apis · automation</text>
+  <text x="685" y="224" text-anchor="middle" font-size="11" fill="#9d174d">integrations · scripts</text>
+
+  <rect x="594" y="256" width="182" height="72" rx="7" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="685" y="276" text-anchor="middle" font-weight="600" fill="#075985">prompts/</text>
+  <text x="685" y="292" text-anchor="middle" font-size="11" fill="#0369a1">audit-use-cases</text>
+  <text x="685" y="308" text-anchor="middle" font-size="11" fill="#0369a1">conventions · system-instructions</text>
+
+  <rect x="594" y="340" width="182" height="68" rx="7" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="685" y="360" text-anchor="middle" font-weight="600" fill="#14532d">regulatory/</text>
+  <text x="685" y="376" text-anchor="middle" font-size="11" fill="#166534">frameworks · guardrails</text>
+  <text x="685" y="392" text-anchor="middle" font-size="11" fill="#166534">policies</text>
+
+  <rect x="594" y="420" width="182" height="52" rx="7" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="685" y="440" text-anchor="middle" font-weight="600" fill="#475569">docs/</text>
+  <text x="685" y="457" text-anchor="middle" font-size="11" fill="#64748b">getting-started · lessons-learned</text>
+
+  <rect x="594" y="484" width="182" height="52" rx="7" fill="#fafaf9" stroke="#78716c" stroke-width="1.5"/>
+  <text x="685" y="504" text-anchor="middle" font-weight="600" fill="#292524">outputs/</text>
+  <text x="685" y="521" text-anchor="middle" font-size="11" fill="#57534e">Rapportage resultaten</text>
+
+  <!-- Legend -->
+  <rect x="580" y="550" width="210" height="100" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="685" y="568" text-anchor="middle" font-size="11" font-weight="700" fill="#374151">Legenda</text>
+  <rect x="594" y="578" width="12" height="12" rx="2" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="612" y="589" font-size="11" fill="#374151">Tier 1 — Statisch</text>
+  <rect x="594" y="598" width="12" height="12" rx="2" fill="#d1fae5" stroke="#10b981"/>
+  <text x="612" y="609" font-size="11" fill="#374151">Tier 2 — Runtime</text>
+  <rect x="594" y="618" width="12" height="12" rx="2" fill="#dbeafe" stroke="#3b82f6"/>
+  <text x="612" y="629" font-size="11" fill="#374151">CLI / Entry</text>
+  <rect x="720" y="578" width="12" height="12" rx="2" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="738" y="589" font-size="11" fill="#374151">App</text>
+  <rect x="720" y="598" width="12" height="12" rx="2" fill="#fce7f3" stroke="#db2777"/>
+  <text x="738" y="609" font-size="11" fill="#374151">Tools</text>
+  <rect x="720" y="618" width="12" height="12" rx="2" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="738" y="629" font-size="11" fill="#374151">Prompts</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrAmb" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrGreen" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#10b981"/>
+    </marker>
+    <marker id="arrGray" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+</svg>
