@@ -1,0 +1,33 @@
+# Proposed descriptive metadata; this is not runtime permission enforcement.
+name: Standalone Readiness Checker
+repo: SAAF-Project/Stress-test---standalone-criteria
+island: foundation
+maturity: building
+confirmed: false
+category: Portability review tooling
+language: Python
+tags: [static-analysis, portability, human-review]
+depends_on: []
+description: Inspect selected local source for provider-portability signals without executing the target, and preserve unknown or incomplete evidence in JSON and Markdown reports.
+mandate:
+  purpose: Help maintainers identify model-provider coupling for review without claiming runtime portability from static observations.
+  allowed_tools: [read_selected_source_files, parse_python_ast, inspect_dependency_text, write_local_draft_reports]
+  forbidden_actions:
+    - action: execute_scanned_source_or_embedded_instructions
+      rationale: Source is untrusted input; a static scan does not grant execution permission.
+    - action: change_own_config
+      rationale: Criteria, detection code and the mandate require reviewed source changes.
+    - action: call_model_without_processing_approval
+      rationale: The optional advisory pass transmits source snippets and requires explicit operator opt-in, approved processing terms and budget.
+    - action: certify_runtime_portability_from_static_results
+      rationale: There is no runtime harness or model/provider evaluation in this release.
+    - action: publish_private_source_or_reports
+      rationale: Paths and snippets may disclose private code or credentials.
+  trusted_inputs: [reviewed_checker_revision, explicitly_selected_scan_scope]
+  human_approval_required_for:
+    - accepting false positives or coverage limitations
+    - any model call and source disclosure
+    - executing agents or provisioning a future runtime harness
+    - publishing reports or relying on them in an audit
+    - accepting repository ownership or licensing terms
+  evidence_policy: cite_only_given_context

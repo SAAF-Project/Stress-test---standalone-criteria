@@ -3,6 +3,7 @@ Compute the standalone-readiness verdict from a list of findings.
 
 Rules (applied in order):
   "no"      — any HIGH-severity blocker
+  "not_assessed" — incomplete input or unrecognised model client (unless HIGH)
   "partial" — no HIGH, but MEDIUM exists OR endpoint not configurable
   "yes"     — no HIGH or MEDIUM, endpoint is configurable (Phase 2 still needed)
 """
@@ -19,6 +20,7 @@ from .scanner.signals import (
     SIGNAL_HARDCODED_KEY,
     SIGNAL_HARDCODED_MODEL,
     SIGNAL_OPENAI_CLIENT,
+    SIGNAL_SCAN_ERROR,
     Signal,
 )
 
@@ -32,7 +34,7 @@ _SIGNAL_NON_COMPAT_SDK = Signal(
     ),
 )
 
-Verdict = Literal["yes", "partial", "no"]
+Verdict = Literal["yes", "partial", "no", "not_assessed"]
 
 
 @dataclass
@@ -43,6 +45,7 @@ class ProjectReport:
     blockers: list[dict]
     cloud_only_features: list[str]
     notes: str
+    assessment_errors: list[dict] = field(default_factory=list)
 
 
 def _detect_client(findings: list[Finding]) -> str:
@@ -80,6 +83,14 @@ def compute_verdict(
     )
 
     client = _detect_client(findings)
+    assessment_errors = [
+        {"file": file, "reason": reason}
+        for file, reason in sorted({(f.file, f.extra.get("reason", "scan incomplete"))
+                                   for f in findings if f.signal == SIGNAL_SCAN_ERROR})
+    ]
+    if client == "unknown":
+        endpoint_configurable = False
+        assessment_errors.append({"file": "", "reason": "No recognised model client"})
 
     # Non-OpenAI-compatible SDKs (anthropic, bedrock, google) cannot be pointed
     # at a local model without code changes — treat as not configurable when
@@ -128,6 +139,8 @@ def compute_verdict(
 
     if high:
         verdict: Verdict = "no"
+    elif assessment_errors:
+        verdict = "not_assessed"
     elif medium or not endpoint_configurable:
         verdict = "partial"
     else:
@@ -144,4 +157,5 @@ def compute_verdict(
         blockers=blockers,
         cloud_only_features=cloud_only,
         notes=notes,
+        assessment_errors=assessment_errors,
     )

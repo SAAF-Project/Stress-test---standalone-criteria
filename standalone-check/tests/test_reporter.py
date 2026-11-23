@@ -9,7 +9,7 @@ from standalone_check.verdict import ProjectReport
 
 _REQUIRED_JSON_KEYS = {
     "project", "standalone_ready", "model_access",
-    "blockers", "cloud_only_features", "notes",
+    "blockers", "cloud_only_features", "notes", "assessment_errors",
 }
 
 

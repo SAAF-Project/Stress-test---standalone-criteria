@@ -16,7 +16,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from standalone_check.cli import _discover_projects
+from standalone_check.cli import _discover_projects, _collect_snippets
+from standalone_check.scanner.files import source_files
 from standalone_check.llm_pass import run_llm_pass
 from standalone_check.scanner.config_files import scan_config_files
 from standalone_check.scanner.python_ast import Finding, scan_python_project
@@ -44,10 +45,10 @@ from standalone_check.verdict import ProjectReport, compute_verdict
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌"}
-_VERDICT_COLOR = {"yes": "green", "partial": "orange", "no": "red"}
-_SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "⚪"}
-_VERDICT_ORDER = {"no": 0, "partial": 1, "yes": 2}
+_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌", "not_assessed": "❔"}
+_VERDICT_COLOR = {"yes": "green", "partial": "orange", "no": "red", "not_assessed": "gray"}
+_SEV_ICON = {"high": "🔴", "medium": "🟡", "low": "⚪", "unknown": "❔"}
+_VERDICT_ORDER = {"no": 0, "not_assessed": 1, "partial": 2, "yes": 3}
 
 # Human-readable label for each signal type
 _SIGNAL_LABEL: dict[str, str] = {
@@ -152,9 +153,10 @@ _SIGNAL_EXPLANATION: dict[str, str] = {
 
 # One-sentence verdict summaries
 _VERDICT_HEADLINE: dict[str, str] = {
-    "yes":     "This project can run against a local model with no code changes.",
-    "partial": "This project is almost there — one or two small changes needed.",
-    "no":      "This project cannot run locally without code changes.",
+    "yes": "Static heuristics found a configurable client and no blocking signals. Runtime remains untested.",
+    "partial": "Static analysis found portability changes to review; runtime remains untested.",
+    "no": "Static analysis found high-severity signals requiring review; runtime remains untested.",
+    "not_assessed": "The input was incomplete or no supported model client was recognised.",
 }
 
 
@@ -209,16 +211,8 @@ def _verdict_reason(report: ProjectReport) -> str:
     v = report.standalone_ready
     blockers = report.blockers
 
-    if v == "yes":
-        client = report.model_access["client"]
-        if client == "openai":
-            return (
-                "The agent uses the OpenAI-compatible SDK and reads the server "
-                "address from an environment variable — just point it at your local model."
-            )
-        if not blockers:
-            return "No LLM lock-in was detected in the scanned source files."
-        return _VERDICT_HEADLINE["yes"]
+    if v in {"yes", "not_assessed"}:
+        return _VERDICT_HEADLINE[v]
 
     if v == "no":
         high = [b for b in blockers if b["severity"] == "high"]
@@ -267,8 +261,10 @@ def _verdict_reason(report: ProjectReport) -> str:
 # ---------------------------------------------------------------------------
 
 def _collect_py_files(proj_dir: Path) -> list[Path]:
-    _skip = {".venv", "venv", "__pycache__", ".tox", "site-packages", "node_modules"}
-    return sorted(p for p in proj_dir.rglob("*.py") if not (_skip & set(p.parts)))
+    try:
+        return [p for p in source_files(proj_dir) if p.suffix == ".py"]
+    except OSError:
+        return []  # shared scanners record the incomplete assessment below
 
 
 def _run_scan(
@@ -304,14 +300,9 @@ def _run_scan(
 
         notes = ""
         if not no_llm:
-            snippets: list[str] = []
-            for py in py_files[:8]:
-                try:
-                    snippets.append(py.read_text(encoding="utf-8", errors="replace")[:500])
-                except OSError:
-                    pass
             prelim = compute_verdict(proj_dir.name, all_findings)
-            notes = run_llm_pass(proj_dir.name, snippets, prelim) or ""
+            if not prelim.assessment_errors:
+                notes = run_llm_pass(proj_dir.name, _collect_snippets(proj_dir), prelim) or ""
 
         report = compute_verdict(proj_dir.name, all_findings, notes=notes)
         reports.append(report)
@@ -418,7 +409,8 @@ def _render_scan_coverage(report: ProjectReport, coverage: dict) -> None:
                 ) + ("…" if len(hits) > 3 else "")
                 result_md = f"🚨 **Found** ({len(hits)}×) — {locations}"
             else:
-                result_md = "✅ Clean — not found"
+                result_md = ("❔ Not assessed — incomplete input" if report.assessment_errors
+                             else "No matching signal in the scanned input")
 
             with st.container(border=False):
                 col_a, col_b = st.columns([5, 7])
@@ -427,24 +419,11 @@ def _render_scan_coverage(report: ProjectReport, coverage: dict) -> None:
 
         st.divider()
 
-        # --- Interpretation ---
-        if not has_llm_usage:
-            st.warning(
-                "**No LLM-related code or packages were detected in this repository.**  \n"
-                "This could mean:\n"
-                "- This repo doesn't use an AI/LLM (in which case the ✅ result is correct)\n"
-                "- The LLM calls are hidden inside a custom wrapper or helper we didn't recognise\n"
-                "- The repo uses a framework (LangChain, LlamaIndex, AutoGen…) that we don't yet cover\n\n"
-                "If you know this project uses an LLM, enable the LLM pass in the sidebar for deeper analysis.",
-                icon="⚠️",
-            )
+        # Static observations never prove behaviour of an unexecuted agent.
+        if report.assessment_errors:
+            st.warning("Assessment incomplete. Resolve input errors or review the unsupported client manually.")
         elif report.standalone_ready == "yes":
-            st.success(
-                "All checks passed. The LLM client is configurable via environment variables — "
-                "no hardcoded cloud dependencies were found. "
-                "Run Phase 2 (runtime harness) to confirm at runtime.",
-                icon="✅",
-            )
+            st.info(_VERDICT_HEADLINE["yes"])
 
 
 def _render_project_card(report: ProjectReport, coverage: dict | None = None) -> None:
@@ -475,7 +454,7 @@ def _render_project_card(report: ProjectReport, coverage: dict | None = None) ->
         )
         c3.metric(
             "Issues found",
-            f"{len(report.blockers)} blocker(s)" if report.blockers else "None ✅",
+            f"{len(report.blockers)} blocker(s); {len(report.assessment_errors)} assessment gap(s)",
         )
 
         # --- Issues ---
@@ -518,6 +497,10 @@ def _render_project_card(report: ProjectReport, coverage: dict | None = None) ->
                 icon="⚠️",
             )
 
+        if report.assessment_errors:
+            st.warning("Assessment incomplete: " + "; ".join(
+                f"{e['file']}: {e['reason']}" for e in report.assessment_errors))
+
         # --- LLM notes ---
         if report.notes:
             st.markdown("#### Additional analysis")
@@ -532,6 +515,7 @@ def _render_project_card(report: ProjectReport, coverage: dict | None = None) ->
                 "blockers": report.blockers,
                 "cloud_only_features": report.cloud_only_features,
                 "notes": report.notes,
+                "assessment_errors": report.assessment_errors,
             },
             indent=2,
         )
@@ -598,7 +582,7 @@ def _page() -> None:
         no_llm = st.checkbox(
             "Skip LLM pass",
             value=True,
-            help="Runs entirely offline. Uncheck to enable fuzzy analysis via a local model.",
+            help="For a local path, scans offline. Uncheck to send source snippets to the configured endpoint; notes are advisory.",
         )
 
         if not no_llm:
@@ -671,7 +655,7 @@ def _page() -> None:
             Enter the path to a monorepo in the sidebar and click **Run Scan**.
 
             The tool will inspect each subdirectory for LLM lock-in signals and
-            report whether it can run against a self-hosted, OpenAI-compatible model.
+            report static portability signals. Runtime behaviour remains untested.
 
             **15 criteria checked across 3 severity levels:**
 
@@ -709,14 +693,15 @@ def _page() -> None:
     st.success(f"Scanned **{len(reports)}** project(s) in `{scanned}`")
 
     # Metrics row
-    counts = {"yes": 0, "partial": 0, "no": 0}
+    counts = {"yes": 0, "partial": 0, "no": 0, "not_assessed": 0}
     for r in reports:
         counts[r.standalone_ready] += 1
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("✅ Standalone ready", counts["yes"])
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Static candidate", counts["yes"])
     m2.metric("⚠️ Partial", counts["partial"])
-    m3.metric("❌ Not ready", counts["no"])
+    m3.metric("❌ Blockers", counts["no"])
+    m4.metric("❔ Not assessed", counts["not_assessed"])
 
     st.divider()
     st.subheader("Summary")
@@ -746,6 +731,7 @@ def _page() -> None:
                     "blockers": r.blockers,
                     "cloud_only_features": r.cloud_only_features,
                     "notes": r.notes,
+                    "assessment_errors": r.assessment_errors,
                 },
                 indent=2,
             )

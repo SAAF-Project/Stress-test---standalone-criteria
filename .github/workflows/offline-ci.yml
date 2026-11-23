@@ -1,0 +1,70 @@
+name: Offline portability checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install hash-locked offline dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-ci.txt
+          python -m pip install --no-deps --no-build-isolation ./standalone-check
+          python -m pip check
+      - name: Run synthetic tests without network or providers
+        run: python -m pytest standalone-check/tests -q -o pythonpath=standalone-check --junitxml=test-results.xml
+      - name: Smoke test the installed CLI on a synthetic candidate
+        run: standalone-check ./standalone-check/tests/fixtures/proj_env_driven --no-llm -o "${RUNNER_TEMP}/standalone-candidate"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: synthetic-test-results-${{ matrix.python }}
+          path: test-results.xml
+          if-no-files-found: error
+          retention-days: 14
+  manifest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: target
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: SAAF-Project/saaf-living-map
+          ref: 068ad51d476ae7090cd4abb8bf395be82e4b2f90
+          path: living-map
+          persist-credentials: false
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --require-hashes -r target/requirements-manifest.txt
+      - name: Validate proposed metadata with the canonical rules
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location("living_map", "living-map/scripts/build_map.py")
+          validator = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(validator)
+          entry = validator.entry("SAAF-Project/Stress-test---standalone-criteria", Path("target/agent.yaml").read_text(), "local", "repo")
+          assert not entry["warnings"], entry["warnings"]
+          assert entry["has_mandate"]
+          assert entry["confirmed"] is False
+          print("Manifest valid; owner confirmation remains pending")
+          PY

@@ -1,13 +1,10 @@
 """
 Text-pattern scanner for JS/TS and cross-language patterns the AST can't reach.
 
-Uses ripgrep when available; falls back to a pure-Python file reader otherwise,
-so all 15 criteria are checked regardless of whether rg is installed.
+Uses a deterministic Python reader, independent of ripgrep and .gitignore.
+The historical module name is retained for import compatibility.
 """
-import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -21,10 +18,10 @@ from .signals import (
     SIGNAL_PROVIDER_FEATURE,
     SIGNAL_TELEMETRY_CALLBACK,
     Signal,
+    SIGNAL_SCAN_ERROR,
 )
-from .python_ast import Finding
-
-_RG = shutil.which("rg")
+from .python_ast import Finding, scan_error
+from .files import project_files, read_source
 
 _ENDPOINT_PATTERN = "|".join(re.escape(ep) for ep in CLOUD_ENDPOINTS)
 _MODEL_PATTERN = "|".join(CLOUD_MODEL_PATTERNS)
@@ -42,15 +39,6 @@ _ALL_GLOBS = [
 ]
 _JS_GLOBS = ["-g", "*.ts", "-g", "*.tsx", "-g", "*.js", "-g", "*.jsx",
              "-g", "*.mjs", "-g", "*.cjs"]
-
-_SKIP_PARTS: frozenset[str] = frozenset(
-    {".venv", "venv", "__pycache__", ".tox", "site-packages", "node_modules", ".git", ".github"}
-)
-
-
-# ---------------------------------------------------------------------------
-# Pure-Python fallback (used when rg is not installed)
-# ---------------------------------------------------------------------------
 
 def _glob_exts(extra_args: list[str]) -> list[str]:
     """Extract file extensions from -g glob args like ['-g', '*.py', '-g', '*.ts']."""
@@ -71,34 +59,29 @@ def _python_grep(pattern: str, path: Path, extra_args: list[str]) -> list[dict]:
     exts = _glob_exts(extra_args)
     if not exts:
         return []
-    try:
-        rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
-    except re.error:
-        return []
+    rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
 
     results: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    for ext in exts:
-        for fpath in sorted(path.rglob(f"*{ext}")):
-            if _SKIP_PARTS & set(fpath.parts):
-                continue
-            try:
-                lines = fpath.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            for lineno, line in enumerate(lines, 1):
-                if rx.search(line):
-                    key = (str(fpath), lineno)
-                    if key not in seen:
-                        seen.add(key)
-                        results.append({
-                            "type": "match",
-                            "data": {
-                                "path": {"text": str(fpath)},
-                                "line_number": lineno,
-                                "lines": {"text": line},
-                            },
-                        })
+    for fpath in project_files(path):
+        if fpath.suffix not in exts:
+            continue
+        try:
+            lines = read_source(fpath).splitlines()
+        except (OSError, UnicodeError) as error:
+            results.append({"type": "scan_error", "file": str(fpath),
+                            "reason": type(error).__name__})
+            continue
+        for lineno, line in enumerate(lines, 1):
+            if rx.search(line):
+                key = (str(fpath), lineno)
+                if key not in seen:
+                    seen.add(key)
+                    results.append({
+                        "type": "match",
+                        "data": {"path": {"text": str(fpath)}, "line_number": lineno,
+                                 "lines": {"text": line}},
+                    })
     return results
 
 
@@ -111,28 +94,17 @@ def _rg_json(
     path: Path,
     extra_args: Optional[list[str]] = None,
 ) -> list[dict]:
-    args = extra_args or []
-    if not _RG:
-        return _python_grep(pattern, path, args)
-    cmd = [_RG, "--json", "--no-heading", "-e", pattern] + args + [str(path)]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return _python_grep(pattern, path, args)
-    matches = []
-    for line in result.stdout.splitlines():
-        try:
-            obj = json.loads(line)
-            if obj.get("type") == "match":
-                matches.append(obj)
-        except json.JSONDecodeError:
-            continue
-    return matches
+    # One reader for all environments: gitignore, rg availability and subprocess
+    # errors must never change coverage. Keep this helper name for API compatibility.
+    return _python_grep(pattern, path, extra_args or [])
 
 
 def _to_finding(
     match: dict, signal: Signal, project_root: Path
 ) -> Optional[Finding]:
+    if match.get("type") == "scan_error":
+        return Finding(SIGNAL_SCAN_ERROR, match["file"], 0, "",
+                       {"reason": match["reason"]})
     try:
         data = match["data"]
         raw_path = Path(data["path"]["text"])
@@ -151,7 +123,7 @@ def _to_finding(
 # Public API
 # ---------------------------------------------------------------------------
 
-def scan_js_ts_project(project_root: Path) -> list[Finding]:
+def _scan_js_ts_project(project_root: Path) -> list[Finding]:
     findings: list[Finding] = []
 
     # Hardcoded cloud endpoints (JS/TS only — Python handled by AST)
@@ -187,3 +159,10 @@ def scan_js_ts_project(project_root: Path) -> list[Finding]:
             findings.append(f)
 
     return findings
+
+
+def scan_js_ts_project(project_root: Path) -> list[Finding]:
+    try:
+        return _scan_js_ts_project(project_root)
+    except (OSError, UnicodeError, re.error) as error:
+        return [scan_error(project_root, error)]

@@ -9,9 +9,11 @@ Covers:
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
-from .python_ast import Finding
+from .python_ast import Finding, scan_error
+from .files import project_files, read_source
 from .signals import (
     CLOUD_ENDPOINTS,
     CLOUD_SDK_IMPORTS,
@@ -73,9 +75,9 @@ def _norm(name: str) -> str:
 def _scan_requirements(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+        text = read_source(path)
+    except (OSError, UnicodeError) as error:
+        return [scan_error(path, error)]
     for lineno, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -96,23 +98,34 @@ def _scan_requirements(path: Path) -> list[Finding]:
 
 
 def _scan_toml(path: Path) -> list[Finding]:
-    findings: list[Finding] = []
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        m = _DEP_LINE_RE.match(line)
-        if not m:
-            continue
-        pkg = _norm(m.group(1))
-        if pkg in _LLM_PKG_NORM:
+        document = tomllib.loads(read_source(path))
+        project = document.get("project", {})
+        dependencies = project.get("dependencies", [])
+        if not isinstance(dependencies, list):
+            raise ValueError("Dependencies must be an array")
+        dependencies = list(dependencies)
+        for group in project.get("optional-dependencies", {}).values():
+            if not isinstance(group, list):
+                raise ValueError("Optional dependencies must be arrays")
+            dependencies.extend(group)
+        poetry = document.get("tool", {}).get("poetry", {}).get("dependencies", {})
+        if not isinstance(poetry, dict):
+            raise ValueError("Poetry dependencies must be a table")
+        dependencies.extend(poetry)
+        if not all(isinstance(item, str) for item in dependencies):
+            raise ValueError("Invalid dependency entry")
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError) as error:
+        return [scan_error(path, error)]
+    findings = []
+    for dep in dependencies:
+        match = _DEP_LINE_RE.match(dep)
+        if match and _norm(match.group(1)) in _LLM_PKG_NORM:
+            package = match.group(1)
             findings.append(Finding(
-                signal=SIGNAL_CLOUD_SDK,
-                file=str(path),
-                line=lineno,
-                snippet=line.strip(),
-                extra={"sdk": m.group(1), "reason": _LLM_PKG_NORM[pkg], "source": "pyproject.toml"},
+                SIGNAL_CLOUD_SDK, str(path), 0, package,
+                {"sdk": package, "source": "pyproject.toml",
+                 "reason": _LLM_PKG_NORM[_norm(package)]},
             ))
     return findings
 
@@ -120,9 +133,9 @@ def _scan_toml(path: Path) -> list[Finding]:
 def _scan_env_file(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+        text = read_source(path)
+    except (OSError, UnicodeError) as error:
+        return [scan_error(path, error)]
     for lineno, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -153,9 +166,9 @@ def _scan_env_file(path: Path) -> list[Finding]:
 def _scan_yaml(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+        text = read_source(path)
+    except (OSError, UnicodeError) as error:
+        return [scan_error(path, error)]
     for lineno, line in enumerate(text.splitlines(), 1):
         for ep in CLOUD_ENDPOINTS:
             if ep in line:
@@ -182,34 +195,21 @@ def scan_config_files(project_root: Path) -> tuple[list[Finding], list[Path]]:
     findings: list[Finding] = []
     scanned: list[Path] = []
 
-    for req in sorted(project_root.rglob("requirements*.txt")):
-        if _SKIP_PARTS & set(req.parts):
-            continue
-        scanned.append(req)
-        findings.extend(_scan_requirements(req))
-
-    for toml in sorted(project_root.rglob("pyproject.toml")):
-        if _SKIP_PARTS & set(toml.parts):
-            continue
-        scanned.append(toml)
-        findings.extend(_scan_toml(toml))
-
-    for setup in sorted(project_root.rglob("setup.cfg")):
-        if _SKIP_PARTS & set(setup.parts):
-            continue
-        scanned.append(setup)
-        findings.extend(_scan_requirements(setup))
-
-    for env in sorted(project_root.rglob(".env*")):
-        if not env.is_file() or _SKIP_PARTS & set(env.parts):
-            continue
-        scanned.append(env)
-        findings.extend(_scan_env_file(env))
-
-    for yml in sorted(list(project_root.rglob("*.yaml")) + list(project_root.rglob("*.yml"))):
-        if _SKIP_PARTS & set(yml.parts):
-            continue
-        scanned.append(yml)
-        findings.extend(_scan_yaml(yml))
-
+    try:
+        paths = project_files(project_root)
+    except OSError as error:
+        return [scan_error(project_root, error)], []
+    for path in paths:
+        scanner = None
+        if path.match("requirements*.txt") or path.name == "setup.cfg":
+            scanner = _scan_requirements
+        elif path.name == "pyproject.toml":
+            scanner = _scan_toml
+        elif path.name.startswith(".env"):
+            scanner = _scan_env_file
+        elif path.suffix in {".yaml", ".yml"}:
+            scanner = _scan_yaml
+        if scanner:
+            scanned.append(path)
+            findings.extend(scanner(path))
     return findings, scanned
