@@ -28,9 +28,9 @@ class TestVerdictRules:
     def test_assistants_is_no(self):
         assert _verdict("proj_assistants") == "no"
 
-    def test_empty_findings_is_yes(self):
+    def test_empty_findings_is_not_assessed(self):
         report = compute_verdict("empty", [])
-        assert report.standalone_ready == "yes"
+        assert report.standalone_ready == "not_assessed"
         assert report.blockers == []
         assert report.cloud_only_features == []
 

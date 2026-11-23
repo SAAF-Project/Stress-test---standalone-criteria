@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .verdict import ProjectReport
 
-_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌"}
+_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌", "not_assessed": "❔"}
 
 
 def write_project_report(report: ProjectReport, output_dir: Path) -> Path:
@@ -19,6 +19,7 @@ def write_project_report(report: ProjectReport, output_dir: Path) -> Path:
         "blockers": report.blockers,
         "cloud_only_features": report.cloud_only_features,
         "notes": report.notes,
+        "assessment_errors": report.assessment_errors,
     }
     out.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return out

@@ -1,0 +1,4 @@
+# Offline CLI/runtime plus test and local wheel-build tools; no provider SDK.
+click==8.1.8
+pytest==8.3.5
+hatchling==1.27.0

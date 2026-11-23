@@ -14,18 +14,12 @@ import click
 from .llm_pass import run_llm_pass
 from .reporter import write_project_report, write_summary
 from .scanner.config_files import scan_config_files
+from .scanner.files import source_files, read_source, project_files
 from .scanner.python_ast import scan_python_project
 from .scanner.ripgrep import scan_js_ts_project
 from .verdict import compute_verdict
 
-_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌"}
-
-# Directories that are never agent projects
-_IGNORED_DIRS: frozenset[str] = frozenset(
-    {".git", ".github", ".venv", "venv", "node_modules", "__pycache__",
-     "reports", "docs", ".tox", "dist", "build"}
-)
-
+_VERDICT_ICON = {"yes": "✅", "partial": "⚠️", "no": "❌", "not_assessed": "❔"}
 
 def _discover_projects(repo_root: Path) -> list[Path]:
     """Return projects to scan.
@@ -33,39 +27,24 @@ def _discover_projects(repo_root: Path) -> list[Path]:
     Monorepo: returns immediate subdirectories that contain source code.
     Single-project repo: if no subdirectories qualify, falls back to root.
     """
-    candidates: list[Path] = []
-    for child in sorted(repo_root.iterdir()):
-        if not child.is_dir() or child.name in _IGNORED_DIRS:
-            continue
-        has_code = (
-            any(child.rglob("*.py"))
-            or any(child.rglob("*.ts"))
-            or any(child.rglob("*.js"))
-        )
-        if has_code:
-            candidates.append(child)
-
-    # Single-project repo: no qualifying subdirs → treat root as the project
-    if not candidates:
-        root_has_code = (
-            any(repo_root.glob("*.py"))
-            or any(repo_root.glob("*.ts"))
-            or any(repo_root.glob("*.js"))
-        )
-        if root_has_code:
-            candidates.append(repo_root)
-
-    return candidates
+    paths = source_files(repo_root)
+    # Root-level source means this is one project, including its nested packages.
+    # Previously a sibling folder caused root-level blockers to disappear.
+    root_files = [p for p in project_files(repo_root) if p.parent == repo_root]
+    root_config = any(
+        p.name in {"pyproject.toml", "setup.cfg", "package.json"}
+        or p.match("requirements*.txt") or p.name.startswith(".env")
+        or p.suffix in {".yaml", ".yml"} for p in root_files
+    )
+    if paths and (root_config or any(p.parent == repo_root for p in paths)):
+        return [repo_root]
+    names = sorted({p.relative_to(repo_root).parts[0] for p in paths})
+    return [repo_root / name for name in names]
 
 
 def _collect_snippets(proj_dir: Path, max_files: int = 8, max_chars: int = 500) -> list[str]:
-    snippets: list[str] = []
-    for py in list(proj_dir.rglob("*.py"))[:max_files]:
-        try:
-            snippets.append(py.read_text(encoding="utf-8", errors="replace")[:max_chars])
-        except OSError:
-            pass
-    return snippets
+    paths = [p for p in source_files(proj_dir) if p.suffix == ".py"][:max_files]
+    return [read_source(p)[:max_chars] for p in paths]
 
 
 @click.command()
@@ -87,33 +66,36 @@ def _collect_snippets(proj_dir: Path, max_files: int = 8, max_chars: int = 500) 
     help="Scan only this project (repeatable)",
 )
 @click.option(
-    "--no-llm",
-    is_flag=True,
-    help="Skip the LLM refinement pass (zero network required)",
+    "--llm/--no-llm",
+    default=False,
+    help="Explicitly opt into sending source snippets to the configured model endpoint.",
 )
 @click.option("--verbose", "-v", is_flag=True)
 def main(
     repo_path: Path,
     output_dir: Path,
     only_projects: tuple[str, ...],
-    no_llm: bool,
+    llm: bool,
     verbose: bool,
 ) -> None:
     """Audit agent projects in REPO_PATH for standalone LLM readiness."""
-    repo_root = repo_path.resolve()
-    all_projects = _discover_projects(repo_root)
+    repo_root = repo_path.absolute()
+    try:
+        all_projects = _discover_projects(repo_root)
+    except OSError as error:
+        click.echo(f"Scan not assessed: {type(error).__name__}", err=True)
+        sys.exit(2)
 
     if only_projects:
+        missing = set(only_projects) - {p.name for p in all_projects}
+        if missing:
+            click.echo(f"Projects not found: {', '.join(sorted(missing))}", err=True)
+            sys.exit(2)
         all_projects = [p for p in all_projects if p.name in only_projects]
-        if not all_projects:
-            click.echo(
-                f"No projects matched: {', '.join(only_projects)}", err=True
-            )
-            sys.exit(1)
 
     if not all_projects:
         click.echo("No agent project subdirectories found.", err=True)
-        sys.exit(1)
+        sys.exit(2)
 
     click.echo(f"Scanning {len(all_projects)} project(s) in {repo_root}\n")
 
@@ -123,7 +105,7 @@ def main(
         findings = scan_python_project(proj_dir) + scan_js_ts_project(proj_dir) + cfg_findings
 
         notes = ""
-        if not no_llm:
+        if llm and not compute_verdict(proj_dir.name, findings).assessment_errors:
             snippets = _collect_snippets(proj_dir)
             prelim = compute_verdict(proj_dir.name, findings)
             notes = run_llm_pass(proj_dir.name, snippets, prelim) or ""
@@ -146,3 +128,8 @@ def main(
     summary_path = write_summary(reports, output_dir)
     click.echo(f"\nReports : {output_dir}/")
     click.echo(f"Summary : {summary_path}")
+
+    if any(r.assessment_errors for r in reports):
+        sys.exit(2)
+    if any(r.standalone_ready != "yes" for r in reports):
+        sys.exit(1)

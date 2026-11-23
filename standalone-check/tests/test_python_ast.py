@@ -150,10 +150,10 @@ class TestInlineSnippets:
         names = self._scan_src(src, tmp_path)
         assert SIGNAL_ENDPOINT_NOT_CONFIGURABLE.name in names
 
-    def test_syntax_error_skipped(self, tmp_path):
+    def test_syntax_error_is_incomplete(self, tmp_path):
         p = tmp_path / "bad.py"
         p.write_text("def (")
-        assert scan_python_file(p) == []
+        assert scan_python_file(p)[0].signal.name == "scan_incomplete"
 
     def test_project_scan_skips_venv(self, tmp_path):
         venv = tmp_path / ".venv" / "lib" / "site.py"

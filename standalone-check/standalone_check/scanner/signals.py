@@ -5,7 +5,7 @@ and the ripgrep wrapper import from one place.
 from dataclasses import dataclass
 from typing import Literal
 
-Severity = Literal["high", "medium", "low"]
+Severity = Literal["high", "medium", "low", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -304,4 +304,10 @@ SIGNAL_LONG_CONTEXT = Signal(
         f"Verify the local model's context limit; "
         "add chunking or summarisation for inputs that may exceed it"
     ),
+)
+
+# Assessment errors are neither clean results nor portability blockers.
+SIGNAL_SCAN_ERROR = Signal(
+    name="scan_incomplete", severity="unknown",
+    fix="Resolve the unreadable, invalid or unsupported input and repeat the scan.",
 )

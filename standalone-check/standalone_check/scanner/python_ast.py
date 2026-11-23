@@ -20,7 +20,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .files import project_files, read_source
 from .signals import (
+    SIGNAL_SCAN_ERROR,
     CLOUD_EMBEDDING_IMPORTS,
     CLOUD_EMBEDDING_NAMESPACES,
     CLOUD_ENDPOINTS,
@@ -336,26 +338,31 @@ class _PythonScanner(ast.NodeVisitor):
         """
         Return True if the client constructor has a base_url (or equivalent) kwarg present.
         Cloud-URL detection is handled separately by visit_Constant, so we only check
-        for *presence* here — absence means "not configurable".
+        for presence and reject explicit None/empty/False; dynamic values remain untested.
         """
-        return any(kw.arg in CONFIGURABLE_KWARGS for kw in node.keywords)
+        return any(
+            kw.arg in CONFIGURABLE_KWARGS
+            and not (isinstance(kw.value, ast.Constant) and kw.value.value in (None, "", False))
+            for kw in node.keywords
+        )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-_SKIP_PARTS: frozenset[str] = frozenset(
-    {".venv", "venv", "__pycache__", ".tox", "site-packages", "node_modules"}
-)
+def scan_error(path: Path, error: Exception) -> Finding:
+    # Do not echo source lines or exception text: parse/read errors can contain secrets.
+    return Finding(SIGNAL_SCAN_ERROR, str(path), 0, "",
+                   {"reason": type(error).__name__})
 
 
 def scan_python_file(path: Path) -> list[Finding]:
     try:
-        source = path.read_text(encoding="utf-8", errors="replace")
+        source = read_source(path)
         tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
+    except (SyntaxError, OSError, UnicodeError, ValueError, RecursionError) as error:
+        return [scan_error(path, error)]
     scanner = _PythonScanner(path, source)
     scanner.visit(tree)
     return scanner.findings
@@ -363,8 +370,11 @@ def scan_python_file(path: Path) -> list[Finding]:
 
 def scan_python_project(project_root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for py in sorted(project_root.rglob("*.py")):
-        if _SKIP_PARTS & set(py.parts):
-            continue
-        findings.extend(scan_python_file(py))
+    try:
+        paths = project_files(project_root)
+    except OSError as error:
+        return [scan_error(project_root, error)]
+    for path in paths:
+        if path.suffix == ".py":
+            findings.extend(scan_python_file(path))
     return findings
